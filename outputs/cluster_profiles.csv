@@ -1,0 +1,4 @@
+cluster,customers,recency_days,frequency,monetary,total_revenue,pct_of_customers,pct_of_revenue,persona
+0,1839,438.0,1.0,326.24999999999983,1020888.5920000001,31.3,5.9,Dormant - inactive and low value
+1,1675,26.0,11.0,3939.24,14341267.211,28.5,82.5,Champions - recent and high value
+2,2364,62.0,3.0,716.555,2012648.465,40.2,11.6,New / low-engagement - recent but small

@@ -1,0 +1,6 @@
+# What the dashboard needs. forecasting.py and segmentation.py want a few more
+# packages on top of these -- see requirements-dev.txt.
+streamlit==1.59.1
+pandas==2.3.3
+duckdb==1.5.5
+plotly==6.9.0

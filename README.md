@@ -229,3 +229,5 @@ that quarter contains the Christmas peak.
 
 Nothing here is incremental. `build_db.py` rebuilds the whole table each run,
 which is fine at a million rows and would not be at a hundred million.
+ 
+ 

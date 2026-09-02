@@ -21,6 +21,18 @@ segmentation.py     RFM + K-means
 spark_aggregate.py  the monthly aggregation redone in PySpark, as a cross-check
 ```
 
+```mermaid
+flowchart LR
+    X1["Year 2009-2010 sheet"] --> B["build_db.py"]
+    X2["Year 2010-2011 sheet"] --> B
+    B --> S["sales table<br/>1,007,913 rows"]
+    S --> A["app.py"]
+    S --> Q["sql/01..03"]
+    S --> F["forecasting.py"]
+    S --> G["segmentation.py"]
+    S -.-> P["spark_aggregate.py"]
+```
+
 ## The data, and what I dropped
 
 UCI Online Retail II, <https://archive.ics.uci.edu/ml/datasets/online+retail+II>,
@@ -229,5 +241,3 @@ that quarter contains the Christmas peak.
 
 Nothing here is incremental. `build_db.py` rebuilds the whole table each run,
 which is fine at a million rows and would not be at a hundred million.
- 
- 

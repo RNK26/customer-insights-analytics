@@ -3,7 +3,9 @@
 Two years of transactions from a UK online gift retailer, loaded into DuckDB and
 then pushed at from three directions: SQL window-function analysis behind a
 Streamlit dashboard, a weekly revenue forecast, and an RFM customer
-segmentation. Everything runs off one cleaned table.
+segmentation. Everything runs off one cleaned table, all at a scale pandas and
+DuckDB handle comfortably on a single machine — a million rows doesn't need a
+cluster.
 
 I picked this dataset because it is messy in ways that force you to make
 decisions rather than just run `groupby`. Cancellations aren't flagged with a
@@ -18,7 +20,6 @@ app.py              Streamlit dashboard
 sql/01..03          the three window-function analyses
 forecasting.py      Prophet vs a seasonal-naive baseline
 segmentation.py     RFM + K-means
-spark_aggregate.py  the monthly aggregation redone in PySpark, as a cross-check
 ```
 
 ```mermaid
@@ -30,7 +31,6 @@ flowchart LR
     S --> Q["sql/01..03"]
     S --> F["forecasting.py"]
     S --> G["segmentation.py"]
-    S -.-> P["spark_aggregate.py"]
 ```
 
 ## The data, and what I dropped
@@ -95,24 +95,6 @@ genuinely costs a lot relative to basket size. The less charitable one is that
 these are pseudo-products polluting the catalogue and any product analysis has
 to exclude them by hand. Both are worth saying out loud, and I do the excluding
 in the dashboard caption rather than silently in the SQL.
-
-## The same aggregation, in PySpark
-
-`spark_aggregate.py` recomputes revenue by country and month through the Spark
-DataFrame API and then checks the result against DuckDB. Both engines return
-£20,476,260.45 over 573 country-months.
-
-This is not here because a million rows need a cluster. It's here because the
-translation between SQL and the DataFrame API is the thing worth being able to
-do, and having the two totals agree is the only way to know I did it right. It
-runs in local mode on one JVM, which is the same API and planner, just not
-distributed.
-
-One wart: `monthly.write.parquet()` goes through the Hadoop FileSystem API,
-which wants `winutils.exe` on Windows. I didn't want to install an unsigned
-binary for it, so the 573 result rows come back to the driver and pandas writes
-them. Spark still does all the scanning and aggregating. The native line is in
-the file, commented, and works on Linux.
 
 ## Forecasting weekly revenue
 
@@ -221,9 +203,6 @@ To rebuild the warehouse from scratch, put `online_retail_II.xlsx` in `data/raw/
 nearly all of it parsing Excel. The raw file is gitignored since it is freely
 downloadable; `requirements.txt` on its own covers just the dashboard, which is
 what the deployed version installs.
-
-`spark_aggregate.py` additionally needs `pyspark` and a JDK with `JAVA_HOME`
-set. It's optional and nothing else depends on it.
 
 ## What I know is wrong with it
 

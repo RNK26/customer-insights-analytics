@@ -29,6 +29,50 @@ def load_raw() -> pd.DataFrame:
     return df
 
 
+def net_out_matched_returns(df: pd.DataFrame, cancelled: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Drops the original sale row behind a cancellation, not just the cancellation.
+
+    Dropping cancelled (negative-quantity) rows alone is not enough: if a
+    customer bought 5 units and later returned all 5, the original +5 sale
+    row is still sitting in the data counting real revenue for a product the
+    customer ended up not keeping. Only dropping the cancellation and leaving
+    the original sale overstates revenue by the full value of every matched
+    return.
+
+    This matches each cancellation to the earliest not-yet-matched sale row
+    with the same CustomerID, StockCode and Quantity (magnitude), dated on or
+    before the cancellation (FIFO, one sale consumed per cancellation) and
+    drops that original sale row too. Cancellations with no CustomerID, or no
+    matching prior sale in this dataset (the purchase may predate this
+    extract, or be a partial/mismatched-quantity return), can't be matched
+    and are left as an unmatched drop of just the negative row -- which is
+    revenue-neutral, since the matching sale (if any) was never counted here
+    in the first place.
+    """
+    cancelled = cancelled.copy()
+    cancelled["AbsQty"] = cancelled["Quantity"].abs()
+    cancelled_valid = cancelled.dropna(subset=["CustomerID"]).sort_values("InvoiceDate")
+
+    sales_idx = df.dropna(subset=["CustomerID"]).sort_values("InvoiceDate")
+    groups: dict[tuple, list[int]] = {}
+    for key, g in sales_idx.groupby(["CustomerID", "StockCode", "Quantity"]):
+        groups[key] = list(g.index)
+    date_lookup = sales_idx["InvoiceDate"]
+
+    to_drop: set[int] = set()
+    for _, row in cancelled_valid.iterrows():
+        key = (row["CustomerID"], row["StockCode"], row["AbsQty"])
+        idx_list = groups.get(key)
+        if not idx_list:
+            continue
+        while idx_list and idx_list[0] in to_drop:
+            idx_list.pop(0)
+        if idx_list and date_lookup.loc[idx_list[0]] <= row["InvoiceDate"]:
+            to_drop.add(idx_list.pop(0))
+
+    return df.drop(index=to_drop), len(to_drop)
+
+
 def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Returns the cleaned frame plus a count of what each rule dropped."""
     report = {"rows_in": len(df)}
@@ -38,6 +82,7 @@ def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     # revenue without any warning.
     df["Invoice"] = df["Invoice"].astype(str)
     is_cancelled = df["Invoice"].str.startswith("C")
+    cancelled = df[is_cancelled]
     report["cancelled"] = int(is_cancelled.sum())
     df = df[~is_cancelled]
 
@@ -52,6 +97,12 @@ def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     before = len(df)
     df = df.drop_duplicates()
     report["duplicates"] = before - len(df)
+
+    # The cancellation rows are gone, but the sale they reversed is still
+    # sitting in df counting revenue it shouldn't. Find and drop that
+    # matching original sale too -- see net_out_matched_returns for why.
+    df, matched_returns = net_out_matched_returns(df, cancelled)
+    report["matched_returns_netted"] = matched_returns
 
     # Defined once here so every query downstream means the same thing by it.
     df["Revenue"] = df["Quantity"] * df["Price"]

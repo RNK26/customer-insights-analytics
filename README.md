@@ -26,7 +26,7 @@ segmentation.py     RFM + K-means
 flowchart LR
     X1["Year 2009-2010 sheet"] --> B["build_db.py"]
     X2["Year 2010-2011 sheet"] --> B
-    B --> S["sales table<br/>1,007,913 rows"]
+    B --> S["sales table<br/>1,001,468 rows"]
     S --> A["app.py"]
     S --> Q["sql/01..03"]
     S --> F["forecasting.py"]
@@ -39,7 +39,7 @@ UCI Online Retail II, <https://archive.ics.uci.edu/ml/datasets/online+retail+II>
 CC BY 4.0. One UK non-store gift retailer, 01 Dec 2009 to 09 Dec 2011, shipped
 as two Excel sheets with an identical schema, so `build_db.py` stacks them.
 
-Out of 1,067,371 raw rows I kept 1,007,913, which is 94.4%:
+Out of 1,067,371 raw rows I kept 1,001,468, which is 93.8%:
 
 | Rule | Rows dropped |
 |---|---:|
@@ -47,11 +47,26 @@ Out of 1,067,371 raw rows I kept 1,007,913, which is 94.4%:
 | Quantity <= 0 | 3,457 |
 | Price <= 0 | 6,207 |
 | Exact duplicate rows | 33,757 |
+| Original sale behind a matched return (see below) | 6,445 |
 
 The cancellations are the one that would quietly ruin the numbers. There's no
 status column, so a cancelled order is only identifiable by its invoice number,
 and it carries negative quantities. Leave them in and they net off real revenue
 without anything looking broken.
+
+Dropping the cancellation row alone isn't enough, though. If a customer bought
+5 units and later returned all 5, the original `+5` sale row is still sitting
+in the table counting revenue for a product the customer ended up not keeping
+— only dropping the negative row and leaving the positive one overstates
+revenue by the full value of every matched return. `build_db.py` now matches
+each cancellation back to the earliest not-yet-matched sale with the same
+customer, product and quantity, dated on or before the cancellation, and drops
+that original sale row too (`net_out_matched_returns`). Of 18,744 cancellations
+with a customer ID, 6,445 matched a prior sale in this dataset and had that
+sale dropped with them; the rest either have no `CustomerID` or no matching
+sale in this two-year window (the original purchase may predate the extract,
+or be a partial/mismatched-quantity return) and are left as a revenue-neutral
+drop of just the negative row, same as before.
 
 The decision I'd actually defend, though, is the one where I dropped nothing.
 228,488 rows, about 23% of the data, have no `CustomerID`. Those are real sales,
@@ -60,8 +75,8 @@ dashboard and the SQL keep them. `segmentation.py` filters them out for its own
 use, because you can't compute a recency for a customer that doesn't exist. Same
 table, opposite rule, because the question changed.
 
-Cleaned total revenue is £20,476,260.45 across 40,077 orders, average order
-value £510.92.
+Cleaned total revenue is £19,797,158.19 across 39,792 orders, average order
+value £497.52.
 
 ## The three SQL questions
 
@@ -70,13 +85,13 @@ rather than pulling the data into pandas and doing it there.
 
 **Is revenue actually growing?** `02_growth_lag.sql` puts `LAG(x, 1)` next to
 `LAG(x, 12)` so month-over-month and year-over-year sit in the same row. November
-2011 is up 30.6% on October, which looks excellent until the YoY column says
-+2.7%. The jump is the Christmas run-up, not growth. Comparing like for like,
-January to November 2011 against the same span in 2010, gives £9,182,868 against
-£9,011,648, so +1.9%. A single seasonal number would have been read as a strong
+2011 is up 33.8% on October, which looks excellent until the YoY column says
++4.2%. The jump is the Christmas run-up, not growth. Comparing like for like,
+January to November 2011 against the same span in 2010, gives £8,960,687 against
+£8,742,370, so +2.5%. A single seasonal number would have been read as a strong
 year, and it isn't one.
 
-**How concentrated is the risk?** The UK is 85.0% of revenue. Ireland, the
+**How concentrated is the risk?** The UK is 85.1% of revenue. Ireland, the
 second market, is 3.2%. That is less a geographic spread than a single market
 with a rounding error attached.
 
@@ -85,10 +100,12 @@ country with `RANK() OVER (PARTITION BY Country ORDER BY product_revenue DESC)`,
 and divides by a `SUM(...) OVER (PARTITION BY Country)` to get each product's
 share of its own market. I expected regional taste differences. What I got was
 that `POSTAGE` is the top revenue line in four of the eight biggest markets:
-Germany 9.07%, Spain 8.24%, France 6.96%, Switzerland 6.62%. Add the UK, where
-`DOTCOM POSTAGE` ranks first at 1.78%, and Ireland, where an accounting line
-called `Manual` ranks first, and only Australia and the Netherlands have a real
-product at the top.
+Germany 9.10%, Spain 9.42%, France 7.20%, Switzerland 6.46%. Add the UK, where
+`DOTCOM POSTAGE` ranks first at 1.84%, and only five of the eight biggest
+markets have a pseudo-product at the top — Australia, the Netherlands, and
+(after the return-netting fix below) Ireland all have a real product leading
+their rankings. `Manual` still shows up for Ireland, just third rather than
+first.
 
 Two readings of that. The charitable one is that shipping to continental Europe
 genuinely costs a lot relative to basket size. The less charitable one is that
@@ -112,13 +129,13 @@ training and score the model on information it wouldn't have had.
 
 | Model | MAE | MAPE |
 |---|---:|---:|
-| Seasonal naive (52 week lag) | £54,354 | 19.6% |
-| Prophet | £43,100 | 16.6% |
+| Seasonal naive (52 week lag) | £55,166 | 20.0% |
+| Prophet | £45,552 | 17.5% |
 
-Prophet is 20.7% better on MAE. I want to be careful about how much credit that
+Prophet is 17.4% better on MAE. I want to be careful about how much credit that
 deserves. On the week the buyers care about, the 14 Nov 2011 peak, actual
-revenue was £387,065; the naive baseline said £380,781, missing by 1.6%, and
-Prophet said £346,217, missing by 10.5%. Prophet is better on average and worse
+revenue was £384,363; the naive baseline said £377,432, missing by 1.8%, and
+Prophet said £342,677, missing by 10.9%. Prophet is better on average and worse
 exactly where a buyer would care. If the question is "how much stock for peak
 week", the baseline is the better answer, and I'd say so.
 
@@ -128,7 +145,7 @@ limitation, not a formality.
 
 ## Customer segmentation
 
-RFM on the 5,878 customers who have an identifier. Recency counts back from the
+RFM on the 5,851 customers who have an identifier. Recency counts back from the
 last date in the data plus a day, not from today, or every customer would look
 equally stale.
 
@@ -139,18 +156,18 @@ everyone else in one undifferentiated blob. The scaling is a separate fix for a
 separate problem: monetary runs into six figures while frequency is single
 digits, so without it monetary decides the distance on its own.
 
-I chose k by silhouette but only considered k >= 3. k=2 scores best at 0.419, and
+I chose k by silhouette but only considered k >= 3. k=2 scores best at 0.418, and
 it gets there by cutting the customer base in half, which is tidy and useless:
 you can't say "at risk" separately from "dormant" with two groups. k=3 scores
-0.401.
+0.400.
 
 | Segment | Customers | Share of base | Share of revenue | Median recency | Median orders | Median spend |
 |---|---:|---:|---:|---:|---:|---:|
-| Champions | 1,675 | 28.5% | 82.5% | 26 days | 11 | £3,939 |
-| New / low engagement | 2,364 | 40.2% | 11.6% | 62 days | 3 | £717 |
-| Dormant | 1,839 | 31.3% | 5.9% | 438 days | 1 | £326 |
+| Champions | 1,649 | 28.2% | 82.0% | 25 days | 11 | £3,920 |
+| New / low engagement | 2,370 | 40.5% | 12.1% | 61 days | 3 | £719 |
+| Dormant | 1,832 | 31.3% | 5.9% | 438 days | 1 | £323 |
 
-28.5% of identified customers produce 82.5% of identified revenue. Note the
+28.2% of identified customers produce 82.0% of identified revenue. Note the
 qualifier: this is revenue from customers we can name, which excludes that 23%
 of transactions with no ID. The concentration is real, the exact percentage
 isn't a statement about the whole business.
@@ -170,13 +187,13 @@ off row order. Adding `ORDER BY 1` made it deterministic.
 
 ## What I'd tell the business
 
-Growth is flat, roughly 2% like for like, and the headline numbers hide that
+Growth is flat, roughly 2.5% like for like, and the headline numbers hide that
 behind seasonality. Any monthly report here needs a YoY column or it will be
 misread.
 
 The customer base has a retention problem rather than an acquisition problem.
-31.3% of identified customers are dormant at a median 438 days, and the 1,675
-Champions carrying 82.5% of revenue are the obvious thing to protect first.
+31.3% of identified customers are dormant at a median 438 days, and the 1,649
+Champions carrying 82.0% of revenue are the obvious thing to protect first.
 
 Shipping is worth a proper look. When postage is the single largest revenue line
 in four European markets, either it's priced above what the basket justifies, or
@@ -209,6 +226,14 @@ what the deployed version installs.
 The `POSTAGE`, `Manual` and `CARRIAGE` lines are still in the base table. I
 exclude them where it matters and flag them in the dashboard, but a stricter
 build would separate service lines from products at load time.
+
+The return-netting match (`net_out_matched_returns` in `build_db.py`) is
+same-dataset only: a return whose original sale falls outside this two-year
+extract, or whose returned quantity doesn't exactly match the original line
+(a partial return), can't be matched and is left as a revenue-neutral drop of
+just the cancellation row. That's roughly 60% of cancellations with a
+customer ID — the matched 40% is a lower bound on how much revenue returns
+actually affect, not the full picture.
 
 Segmentation only sees 77% of transactions, because the rest have no customer.
 
